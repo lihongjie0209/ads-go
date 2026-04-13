@@ -228,15 +228,54 @@ func (c *Client) scheduleNextStateCheck(pollerID int) {
 	})
 }
 
-// invokeConnectionLostHook clears the cached state and calls the OnConnectionLost hook.
+// invokeConnectionLostHook clears the cached state, calls the OnConnectionLost hook,
+// and — when AutoReconnect is enabled — starts an exponential-backoff reconnect loop.
 func (c *Client) invokeConnectionLostHook(err error) {
 	c.stateMutex.Lock()
 	c.currentState = nil
 	c.stateMutex.Unlock()
 
+	// Notify the caller (fire-and-forget, always).
 	go c.invokeHook("OnConnectionLost", func() {
 		c.settings.OnConnectionLost(c, err)
 	})
+
+	if !c.settings.AutoReconnect {
+		return
+	}
+
+	// Only one reconnect loop at a time.
+	if !c.reconnecting.TryLock() {
+		c.logger.Debug("invokeConnectionLostHook: reconnect already in progress, skipping")
+		return
+	}
+
+	go func() {
+		defer c.reconnecting.Unlock()
+
+		interval := c.settings.ReconnectInitialInterval
+		attempt := 1
+
+		for {
+			c.logger.Info("AutoReconnect: waiting before attempt", "attempt", attempt, "interval", interval)
+			time.Sleep(interval)
+
+			c.logger.Info("AutoReconnect: attempting to reconnect", "attempt", attempt)
+			if connErr := c.Connect(); connErr != nil {
+				c.logger.Warn("AutoReconnect: attempt failed", "attempt", attempt, "error", connErr)
+				// Exponential backoff, capped at ReconnectMaxInterval.
+				interval *= 2
+				if interval > c.settings.ReconnectMaxInterval {
+					interval = c.settings.ReconnectMaxInterval
+				}
+				attempt++
+				continue
+			}
+
+			c.logger.Info("AutoReconnect: reconnected successfully", "attempts", attempt)
+			return
+		}
+	}()
 }
 
 // invokeStateChangeHook safely calls the OnStateChange hook with panic recovery.

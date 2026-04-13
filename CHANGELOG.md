@@ -8,6 +8,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ## [Unreleased]
 
 ### Added
+- **Built-in Auto-Reconnect**: The ADS client can now reconnect automatically when the
+  connection is lost unexpectedly, without requiring the caller to implement a reconnect loop.
+  - `AutoReconnect bool` in `ClientSettings` — opt-in, default `false` (backwards compatible)
+  - `ReconnectInitialInterval time.Duration` — delay before first attempt (default: 1s)
+  - `ReconnectMaxInterval time.Duration` — cap on exponential backoff (default: 30s)
+  - Uses exponential backoff: interval doubles on each failure, capped at `ReconnectMaxInterval`
+  - `OnConnectionLost` still fires on every drop as a notification hook
+  - At most one reconnect loop runs at a time (concurrent drops are deduplicated)
+
+### Changed
+- **`cmd/main.go`**: Switched to `AutoReconnect: true`; removed the manual `OnConnectionLost`
+  reconnect loop that previously lived in application code.
+
 - **CLI Enhancements**: Major improvements to the command-line interface
   - **Intelligent Autocomplete System**:
     - Nested command completion with TAB key

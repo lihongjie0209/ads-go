@@ -3,7 +3,6 @@ package main
 import (
 	"log/slog"
 	"os"
-	"sync"
 	"time"
 
 	"github.com/jarmocluyse/ads-go/cmd/cli"
@@ -13,7 +12,8 @@ import (
 )
 
 const (
-	defaultTargetNetID = "192.168.157.131.1.1"
+	// defaultTargetNetID = "192.168.157.131.1.1"
+	defaultTargetNetID = "127.0.0.1.1.1"
 	defaultTimeout     = 2 * time.Second
 )
 
@@ -26,14 +26,10 @@ func main() {
 	slog.Info("main: Starting application")
 
 	settings := ads.ClientSettings{
-		TargetNetID: defaultTargetNetID,
-		Timeout:     defaultTimeout,
+		TargetNetID:   defaultTargetNetID,
+		Timeout:       defaultTimeout,
+		AutoReconnect: true,
 	}
-
-	// Synchronization for reconnection logic
-	var reconnecting sync.Mutex
-	var gracefulDisconnect bool
-	var gracefulDisconnectMutex sync.Mutex
 
 	// Configure connection event hooks
 	settings.OnConnect = func(client *ads.Client, addr ads.AmsAddress) error {
@@ -43,55 +39,10 @@ func main() {
 
 	settings.OnDisconnect = func(client *ads.Client) {
 		slog.Info("EVENT: ADS client disconnected gracefully")
-		gracefulDisconnectMutex.Lock()
-		gracefulDisconnect = true
-		gracefulDisconnectMutex.Unlock()
 	}
 
 	settings.OnConnectionLost = func(client *ads.Client, err error) {
-		slog.Error("EVENT: ADS connection lost unexpectedly", "error", err)
-
-		// Check if this was a graceful disconnect
-		gracefulDisconnectMutex.Lock()
-		wasGraceful := gracefulDisconnect
-		gracefulDisconnectMutex.Unlock()
-
-		if wasGraceful {
-			slog.Debug("Skipping reconnection for graceful disconnect")
-			return
-		}
-
-		// Prevent concurrent reconnection attempts
-		if !reconnecting.TryLock() {
-			slog.Debug("Reconnection already in progress, skipping")
-			return
-		}
-
-		// Start reconnection loop
-		go func() {
-			defer reconnecting.Unlock()
-
-			slog.Info("Starting reconnection loop...")
-			attemptNum := 1
-			reconnectInterval := 5 * time.Second
-
-			for {
-				slog.Info("Attempting to reconnect...", "attempt", attemptNum)
-
-				// Wait before attempting reconnection
-				time.Sleep(reconnectInterval)
-
-				// Try to reconnect
-				if err := client.Connect(); err != nil {
-					slog.Warn("Reconnection attempt failed", "attempt", attemptNum, "error", err)
-					attemptNum++
-					continue
-				}
-
-				slog.Info("Successfully reconnected to ADS router!", "attempts", attemptNum)
-				return
-			}
-		}()
+		slog.Error("EVENT: ADS connection lost unexpectedly — reconnecting...", "error", err)
 	}
 
 	settings.OnStateChange = func(client *ads.Client, newState, oldState *adsstateinfo.SystemState) {

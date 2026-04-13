@@ -39,6 +39,7 @@ type Client struct {
 	lastRestartIndex        *uint16                        // last seen restart index (nil if not yet read or not supported)
 	extendedStateMutex      sync.RWMutex                   // protects extended state fields
 	consecutiveReadFailures int                            // number of consecutive state read failures
+	reconnecting            sync.Mutex                     // guards the auto-reconnect loop (at most one at a time)
 
 	// onConnCaptured is an optional test hook called from receive() immediately
 	// after it captures c.conn into a local variable. Tests use this to
@@ -89,6 +90,22 @@ type ClientSettings struct {
 	// glitch without declaring the connection lost.
 	// Set to 1 to trigger OnConnectionLost on the first failure.
 	MaxConsecutiveReadFailures int
+
+	// AutoReconnect enables automatic reconnection when the connection is lost unexpectedly.
+	// When true the client retries Connect() with exponential backoff until it succeeds.
+	// OnConnectionLost (if set) still fires as a notification on every drop, but the
+	// caller no longer needs to implement its own reconnect loop.
+	// Default: false (opt-in, backwards compatible).
+	AutoReconnect bool
+
+	// ReconnectInitialInterval is the delay before the first reconnect attempt (default: 1s).
+	// Only used when AutoReconnect is true.
+	ReconnectInitialInterval time.Duration
+
+	// ReconnectMaxInterval is the maximum delay between reconnect attempts (default: 30s).
+	// The interval doubles after each failed attempt and is capped at this value.
+	// Only used when AutoReconnect is true.
+	ReconnectMaxInterval time.Duration
 }
 
 // LoadDefaults sets the default values for any unset ClientSettings fields.
@@ -110,6 +127,12 @@ func (cs *ClientSettings) LoadDefaults() {
 	}
 	if cs.MaxConsecutiveReadFailures == 0 {
 		cs.MaxConsecutiveReadFailures = 1
+	}
+	if cs.ReconnectInitialInterval == 0 {
+		cs.ReconnectInitialInterval = 1 * time.Second
+	}
+	if cs.ReconnectMaxInterval == 0 {
+		cs.ReconnectMaxInterval = 30 * time.Second
 	}
 }
 
